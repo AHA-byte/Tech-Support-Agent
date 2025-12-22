@@ -23,7 +23,7 @@ def generate_ticket_id():
 
 def generate_escalation_ticket(name, email, initial_issue, qa_history):
     """
-    Generates a ticket when AI diagnosis fails, including the full chat history.
+    Generates a ticket when AI diagnosis fails or is skipped.
     """
     if not client: return "Error"
     
@@ -35,22 +35,21 @@ def generate_escalation_ticket(name, email, initial_issue, qa_history):
     You are a Support Ticket Generator.
     
     CONTEXT:
-    The user tried to solve an issue with the AI Agent but failed.
-    We need to escalate this to a Human Agent.
+    The user was interacting with the AI Agent but decided to escalate to a human.
     
     User: {name} ({email})
     Ticket ID: {ticket_id}
     Original Issue: {initial_issue}
     
-    AI CHAT LOG (What was already tried):
+    AI CHAT LOG (Partial history of what was asked so far):
     {history_text}
     
     TASK:
     Write a formal Escalation Ticket. 
     - Header: Ticket #{ticket_id} - Escalated to Human Support
     - Section 1: User Details & Original Issue
-    - Section 2: Summary of AI Troubleshooting (Summarize the Q&A log briefly)
-    - Section 3: Action Required (Tell the human agent to review the failed AI attempt and contact the user).
+    - Section 2: Partial Diagnostic Info (Summarize the Q&A log briefly)
+    - Section 3: Action Required (Human agent to follow up).
     """
     
     try:
@@ -63,9 +62,7 @@ def generate_escalation_ticket(name, email, initial_issue, qa_history):
         return f"Error generating ticket: {e}"
 
 def get_diagnostic_questions(issue_description):
-    """
-    Step 1 of Chat: Takes the initial issue and generates a list of clarifying questions.
-    """
+    """Step 1: Get questions."""
     if not client: return []
     
     prompt = f"""
@@ -73,7 +70,7 @@ def get_diagnostic_questions(issue_description):
     User Issue: "{issue_description}"
     
     Task: Generate 3 to 5 critical clarifying questions to diagnose this specific issue. 
-    Do not provide a solution yet. Just ask questions to understand the hardware/software/context.
+    Do not provide a solution yet. Just ask questions.
     
     FORMATTING RULE: 
     Write the questions in a single block of text. 
@@ -88,7 +85,6 @@ def get_diagnostic_questions(issue_description):
             temperature=0.5
         )
         content = response.choices[0].message.content
-        # Split by the double pipe separator to get a clean list
         questions = [q.strip() for q in content.split("||") if q.strip()]
         return questions
     except Exception as e:
@@ -96,26 +92,19 @@ def get_diagnostic_questions(issue_description):
         return []
 
 def get_final_diagnosis(issue_description, qa_history):
-    """
-    Step 2 of Chat: Takes the history and gives the final solution.
-    """
+    """Step 2: Get final diagnosis."""
     if not client: return "Error: API not connected."
     
-    # Format the Q&A for the prompt
     history_text = "\n".join([f"Q: {q}\nA: {a}" for q, a in qa_history])
     
     prompt = f"""
     You are an Expert Tier 2 Tech Support Agent.
-    
     Original Issue: "{issue_description}"
-    
     Clarifying Q&A:
     {history_text}
     
     Task: 
-    Based on the user's answers, provide a final technical diagnosis and a solution.
-    Since this is a one-time response, be thorough.
-    
+    Provide a final technical diagnosis and a solution based on these answers.
     Format:
     1. **Diagnosis**: What is likely wrong.
     2. **Solution**: Step-by-step fix.
@@ -132,12 +121,12 @@ def get_final_diagnosis(issue_description, qa_history):
         return f"AI Error: {e}"
 
 def get_ticket_solution(name, category, description, ticket_id):
-    """(Existing logic for the standard ticket form)"""
+    """Standard ticket generation."""
     if not client: return "Error"
     prompt = f"""
     Context: User {name}, Ticket {ticket_id}, Category {category}.
     Issue: {description}
-    Task: Write a formatted support ticket response with a header, greeting, root cause analysis, numbered steps, and closing.
+    Task: Write a support ticket response.
     """
     response = client.chat.completions.create(
         model="gpt-4o",
@@ -148,10 +137,9 @@ def get_ticket_solution(name, category, description, ticket_id):
 # --- PAGE LAYOUT ---
 st.set_page_config(page_title="LPS Tech Support", page_icon="💠", layout="wide")
 
-# Header with Logo
+# Header
 col1, col2 = st.columns([1, 15])
 with col1:
-    # Ensure you have a logo.webp or comment this out
     if os.path.exists("logo.webp"):
         st.image("logo.webp", width=70)
     else:
@@ -163,7 +151,7 @@ with col2:
 page = st.radio("Select Mode:", ["📝 Send Support Ticket", "🤖 Direct AI Chat"], horizontal=True)
 st.divider()
 
-# --- MODE 1: SEND TICKET (Old Functionality) ---
+# --- MODE 1: SEND TICKET ---
 if page == "📝 Send Support Ticket":
     st.subheader("Submit a Formal Ticket")
     with st.form("support_ticket_form"):
@@ -186,13 +174,13 @@ if page == "📝 Send Support Ticket":
             st.success("Ticket Generated!")
             st.markdown(res)
 
-# --- MODE 2: DIRECT AI CHAT (New Functionality) ---
+# --- MODE 2: DIRECT AI CHAT ---
 elif page == "🤖 Direct AI Chat":
     st.subheader("Interactive Triage Agent")
     
-    # Initialize Session State Variables
+    # Initialize Session State
     if "chat_step" not in st.session_state:
-        st.session_state.chat_step = "init" # init -> questioning -> diagnosis
+        st.session_state.chat_step = "init"
     if "chat_questions" not in st.session_state:
         st.session_state.chat_questions = []
     if "chat_answers" not in st.session_state:
@@ -220,8 +208,8 @@ elif page == "🤖 Direct AI Chat":
                         st.session_state.original_issue = user_issue
                         st.session_state.chat_questions = qs
                         st.session_state.chat_step = "questioning"
-                        st.session_state.final_diagnosis = None # Reset diagnosis
-                        st.session_state.show_escalation = False # Reset escalation
+                        st.session_state.final_diagnosis = None 
+                        st.session_state.show_escalation = False
                         st.rerun()
                     else:
                         st.error("Could not generate questions. Please try again.")
@@ -239,71 +227,92 @@ elif page == "🤖 Direct AI Chat":
         
         answer = st.text_input("Your Answer:", key=f"ans_{idx}")
         
-        if st.button("Next ➡️"):
-            if not answer:
-                st.warning("Please provide an answer.")
-            else:
-                st.session_state.chat_answers.append((current_q, answer))
-                
-                if idx + 1 < total:
-                    st.session_state.chat_current_q_index += 1
-                    st.rerun()
+        col_next, col_stop = st.columns([1, 1])
+        
+        with col_next:
+            if st.button("Next ➡️"):
+                if not answer:
+                    st.warning("Please provide an answer.")
                 else:
-                    st.session_state.chat_step = "diagnosis"
-                    st.rerun()
+                    st.session_state.chat_answers.append((current_q, answer))
+                    if idx + 1 < total:
+                        st.session_state.chat_current_q_index += 1
+                        st.rerun()
+                    else:
+                        st.session_state.chat_step = "diagnosis"
+                        st.rerun()
 
-    # STEP 3: Final Diagnosis
+        # --- NEW: Early Exit Button ---
+        with col_stop:
+            if st.button("🛑 Stop & Create Ticket"):
+                # Save whatever answer was currently typed (optional)
+                if answer:
+                    st.session_state.chat_answers.append((current_q, answer))
+                
+                # Force move to end step, but set flags to skip AI diagnosis
+                st.session_state.chat_step = "diagnosis"
+                st.session_state.show_escalation = True # Force show form
+                st.session_state.final_diagnosis = "SKIPPED" # Flag to skip logic
+                st.rerun()
+
+    # STEP 3: Final Diagnosis OR Escalation
     elif st.session_state.chat_step == "diagnosis":
-        st.success("Analysis Complete.")
         
-        # 1. Generate Diagnosis (Only once)
-        if st.session_state.final_diagnosis is None:
-            with st.spinner("Compiling final diagnosis based on your answers..."):
-                final_res = get_final_diagnosis(
-                    st.session_state.original_issue, 
-                    st.session_state.chat_answers
-                )
-                st.session_state.final_diagnosis = final_res
-        
-        # 2. Display Diagnosis
-        st.markdown("### 🩺 Final Diagnosis & Solution")
-        st.markdown(st.session_state.final_diagnosis)
-        
-        # 3. View History (New Feature)
-        with st.expander("📝 View Troubleshooting History"):
-            st.write(f"**Issue:** {st.session_state.original_issue}")
-            for q, a in st.session_state.chat_answers:
-                st.markdown(f"**Q:** {q}")
-                st.markdown(f"**A:** {a}")
-                st.divider()
+        # Only run diagnosis if the user didn't skip
+        if st.session_state.final_diagnosis != "SKIPPED":
+            
+            # Run AI Diagnosis if not already cached
+            if st.session_state.final_diagnosis is None:
+                with st.spinner("Compiling final diagnosis..."):
+                    final_res = get_final_diagnosis(
+                        st.session_state.original_issue, 
+                        st.session_state.chat_answers
+                    )
+                    st.session_state.final_diagnosis = final_res
+            
+            # Show Diagnosis UI
+            st.success("Analysis Complete.")
+            st.markdown("### 🩺 Final Diagnosis & Solution")
+            st.markdown(st.session_state.final_diagnosis)
+            
+            # View History
+            with st.expander("📝 View Troubleshooting History"):
+                st.write(f"**Issue:** {st.session_state.original_issue}")
+                for q, a in st.session_state.chat_answers:
+                    st.markdown(f"**Q:** {q}")
+                    st.markdown(f"**A:** {a}")
+                    st.divider()
 
-        st.divider()
-        st.subheader("Did this solve your problem?")
-        
-        # 4. Solved / Escalation Logic (New Feature)
-        col_y, col_n = st.columns([1, 4])
-        
-        with col_y:
-            if st.button("✅ Yes, Solved!"):
-                st.balloons()
-                st.success("Great! Happy to help.")
-                if st.button("Start New Chat"):
-                    st.session_state.chat_step = "init"
-                    st.session_state.chat_questions = []
-                    st.session_state.chat_answers = []
-                    st.session_state.chat_current_q_index = 0
-                    st.session_state.original_issue = ""
-                    st.session_state.final_diagnosis = None
-                    st.session_state.show_escalation = False
+            st.divider()
+            st.subheader("Did this solve your problem?")
+            col_y, col_n = st.columns([1, 4])
+            
+            with col_y:
+                if st.button("✅ Yes, Solved!"):
+                    st.balloons()
+                    st.success("Great! Happy to help.")
+                    if st.button("Start New Chat"):
+                        st.session_state.chat_step = "init"
+                        st.session_state.chat_questions = []
+                        st.session_state.chat_answers = []
+                        st.session_state.chat_current_q_index = 0
+                        st.session_state.original_issue = ""
+                        st.session_state.final_diagnosis = None
+                        st.session_state.show_escalation = False
+                        st.rerun()
+            with col_n:
+                if st.button("❌ No, Create Ticket"):
+                    st.session_state.show_escalation = True
                     st.rerun()
 
-        with col_n:
-            if st.button("❌ No, Create Ticket"):
-                st.session_state.show_escalation = True
-        
-        # 5. Escalation Form (Conditional)
+        # --- ESCALATION FORM ---
+        # Shows if user clicked "Stop" in Step 2 OR "No" in Step 3
         if st.session_state.show_escalation:
-            st.warning("We're sorry the AI solution didn't work. Please provide details to escalate.")
+            if st.session_state.final_diagnosis == "SKIPPED":
+                st.warning("Diagnostic process stopped by user. Proceeding to ticket creation.")
+            else:
+                st.warning("We're sorry the AI solution didn't work. Please provide details to escalate.")
+            
             with st.form("escalation_form"):
                 e_name = st.text_input("Your Name")
                 e_email = st.text_input("Your Email")
@@ -311,7 +320,7 @@ elif page == "🤖 Direct AI Chat":
             
             if e_submitted:
                 if e_name and e_email:
-                    with st.spinner("Generating Escalation Ticket with full context..."):
+                    with st.spinner("Generating Escalation Ticket with partial context..."):
                         ticket_text = generate_escalation_ticket(
                             e_name, 
                             e_email, 
