@@ -4,10 +4,13 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-streamlit = "*"
-python-dotenv = "*"
 google-genai = "*"
+streamlit = "*"
+fastapi = "*"
+uvicorn = "*"
 openai = "*"
+python-dotenv = "*"
+pydantic = "*"
 
 [dev-packages]
 
